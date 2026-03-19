@@ -79,6 +79,31 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function extractPaiementMonth(p: any): string {
+  const raw =
+    p.date_paiement ||
+    p.date_valeur ||
+    p.created_at?.toDate?.()?.toISOString?.() ||
+    "";
+
+  if (!raw) return "";
+
+  if (typeof raw === "string" && raw.length >= 7) {
+    return raw.slice(0, 7);
+  }
+
+  const d = raw?.toDate ? raw.toDate() : new Date(raw);
+  if (Number.isNaN(d.getTime())) return "";
+
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+}
+
+function getPaiementAmount(p: any): number {
+  return asNumber(
+    p.montant ?? p.montant_total ?? p.montant_paye ?? p.amount ?? 0
+  );
+}
+
 const DashboardView: React.FC<Props> = ({
   promotions,
   leaders,
@@ -97,6 +122,30 @@ const DashboardView: React.FC<Props> = ({
     viewMode === "monthly" ? selectedMonth : `${selectedYear}-12`;
 
   const today = todayIso();
+
+  const promotionsStats = useMemo(() => {
+    const total = promotions.length;
+
+    const enCours = promotions.filter((p: any) => {
+      const endDate = String(
+        p.date_fin_reelle || p.date_fin_previsionnelle || "9999-12-31"
+      );
+      return endDate >= today;
+    }).length;
+
+    const achevees = promotions.filter((p: any) => {
+      const endDate = String(
+        p.date_fin_reelle || p.date_fin_previsionnelle || "9999-12-31"
+      );
+      return endDate < today;
+    }).length;
+
+    return {
+      total,
+      enCours,
+      achevees,
+    };
+  }, [promotions, today]);
 
   const analytics = useMemo(() => {
     const filter = promoFilter === "all" ? null : promoFilter;
@@ -164,11 +213,10 @@ const DashboardView: React.FC<Props> = ({
         ? new Set(promotions.map((p) => p.id))
         : new Set([promoFilter]);
 
-    const scopeLeaderIds = new Set(
-      leaders
-        .filter((l) => scopePromoIds.has(String(l.promotion_id || "")))
-        .map((l) => l.id)
-    );
+    const leadersById = new Map<string, any>();
+    for (const l of leaders) {
+      leadersById.set(String(l.id), l);
+    }
 
     const months =
       viewMode === "monthly"
@@ -178,19 +226,22 @@ const DashboardView: React.FC<Props> = ({
     const totals = new Map<string, number>();
     for (const m of months) totals.set(m, 0);
 
-    for (const imp of imputations) {
-      if (String((imp as any).status || "ACTIF") === "ANNULE") continue;
+    for (const p of paiements as any[]) {
+      if (String(p.status || "ACTIF") === "ANNULE") continue;
 
-      const leaderId = String(imp.leader_id || "");
-      if (!scopeLeaderIds.has(leaderId)) continue;
+      const leaderId = String(p.leader_id || "");
+      const leader = leadersById.get(leaderId);
 
-      const mois = String((imp as any).mois || "");
-      if (!totals.has(mois)) continue;
-
-      totals.set(
-        mois,
-        asNumber(totals.get(mois)) + asNumber(imp.montant_impute)
+      const paymentPromoId = String(
+        p.promotion_id || leader?.promotion_id || ""
       );
+
+      if (!scopePromoIds.has(paymentPromoId)) continue;
+
+      const month = extractPaiementMonth(p);
+      if (!month || !totals.has(month)) continue;
+
+      totals.set(month, asNumber(totals.get(month)) + getPaiementAmount(p));
     }
 
     return months.map((m) => ({
@@ -202,7 +253,7 @@ const DashboardView: React.FC<Props> = ({
     promoFilter,
     promotions,
     leaders,
-    imputations,
+    paiements,
     viewMode,
     selectedMonth,
     selectedYear,
@@ -262,7 +313,10 @@ const DashboardView: React.FC<Props> = ({
           .sort((a, b) => String(a.mois).localeCompare(String(b.mois)));
 
         const risk = computeRiskFromOverdueRows(overdueRows);
-        const totalDue = overdueRows.reduce((sum, r) => sum + asNumber(r.remain), 0);
+        const totalDue = overdueRows.reduce(
+          (sum, r) => sum + asNumber(r.remain),
+          0
+        );
 
         return {
           id: leader.id,
@@ -304,7 +358,9 @@ const DashboardView: React.FC<Props> = ({
 
     for (const item of riskDashboardList) {
       init[item.riskLevel as keyof typeof init].count += 1;
-      init[item.riskLevel as keyof typeof init].amount += asNumber(item.totalDue);
+      init[item.riskLevel as keyof typeof init].amount += asNumber(
+        item.totalDue
+      );
     }
 
     return init;
@@ -366,7 +422,8 @@ const DashboardView: React.FC<Props> = ({
       })
       .sort(
         (a, b) =>
-          asNumber(b.stats?.tauxRecouvrement) - asNumber(a.stats?.tauxRecouvrement)
+          asNumber(b.stats?.tauxRecouvrement) -
+          asNumber(a.stats?.tauxRecouvrement)
       );
   }, [targetDate, promotions, leaders, schedules, paiements, imputations, today]);
 
@@ -403,7 +460,9 @@ const DashboardView: React.FC<Props> = ({
         }`}
       >
         {typeof value === "number" ? value.toLocaleString() : value}{" "}
-        <span className="text-[10px] opacity-40 uppercase ml-1">{suffix}</span>
+        <span className="text-[10px] opacity-40 uppercase ml-1">
+          {suffix}
+        </span>
       </div>
 
       {subValue && (
@@ -476,6 +535,36 @@ const DashboardView: React.FC<Props> = ({
             className="bg-sbbsGray border-none rounded-2xl px-6 py-3.5 text-[11px] font-black text-sbbsNavy shadow-inner outline-none w-auto"
           />
         </div>
+      </div>
+
+      {/* KPI STRUCTURELS PROMOTIONS */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <KPIBox
+          title="Total promotions"
+          value={promotionsStats.total}
+          subValue="Toutes promotions confondues"
+          colorClass="border-sbbsNavy"
+          icon={<Icons.Promo />}
+          suffix=""
+        />
+
+        <KPIBox
+          title="Promotions en cours"
+          value={promotionsStats.enCours}
+          subValue="Cycles actuellement actifs"
+          colorClass="border-sbbsGreen"
+          icon={<Icons.Dashboard />}
+          suffix=""
+        />
+
+        <KPIBox
+          title="Promotions achevées"
+          value={promotionsStats.achevees}
+          subValue="Cycles terminés"
+          colorClass="border-sbbsGray"
+          icon={<Icons.Abandon />}
+          suffix=""
+        />
       </div>
 
       {/* KPI BRUT / BOURSES / NET */}
@@ -625,7 +714,7 @@ const DashboardView: React.FC<Props> = ({
               Graphique mensuel des encaissements
             </h3>
             <p className="text-[10px] font-bold text-sbbsText opacity-40 uppercase tracking-widest mt-1">
-              Montants imputés par mois sur la période sélectionnée
+              Montants réellement encaissés par mois d’entrée en caisse
             </p>
           </div>
 
@@ -1074,7 +1163,8 @@ const DashboardView: React.FC<Props> = ({
                   <td className="px-6 py-5 text-right">
                     <div
                       className={`text-lg font-black ${
-                        asNumber(p.stats?.tauxRecouvrement) >= asNumber(p.objectif)
+                        asNumber(p.stats?.tauxRecouvrement) >=
+                        asNumber(p.objectif)
                           ? "text-sbbsGreen"
                           : "text-sbbsRed"
                       }`}
