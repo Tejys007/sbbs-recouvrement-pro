@@ -147,6 +147,62 @@ const DashboardView: React.FC<Props> = ({
     };
   }, [promotions, today]);
 
+  const leadersStats = useMemo(() => {
+    const promoById = new Map<string, any>();
+    for (const p of promotions) {
+      promoById.set(String(p.id), p);
+    }
+
+    const isPromotionAchevee = (promotion: any) => {
+      const endDate = String(
+        promotion?.date_fin_reelle ||
+          promotion?.date_fin_previsionnelle ||
+          "9999-12-31"
+      );
+      return endDate < today;
+    };
+
+    const isPromotionEnCours = (promotion: any) => {
+      const endDate = String(
+        promotion?.date_fin_reelle ||
+          promotion?.date_fin_previsionnelle ||
+          "9999-12-31"
+      );
+      return endDate >= today;
+    };
+
+    const total = leaders.length;
+
+    const actifs = leaders.filter((l: any) => {
+      if (String(l.statut || "").toUpperCase() !== "ACTIF") return false;
+      const promo = promoById.get(String(l.promotion_id || ""));
+      if (!promo) return false;
+      return isPromotionEnCours(promo);
+    }).length;
+
+    const acheves = leaders.filter((l: any) => {
+      const promo = promoById.get(String(l.promotion_id || ""));
+      if (!promo) return false;
+      return isPromotionAchevee(promo);
+    }).length;
+
+    const attente = leaders.filter(
+      (l: any) => String(l.statut || "").toUpperCase() === "ATTENTE"
+    ).length;
+
+    const abandons = leaders.filter(
+      (l: any) => String(l.statut || "").toUpperCase() === "ABANDON"
+    ).length;
+
+    return {
+      total,
+      actifs,
+      acheves,
+      attente,
+      abandons,
+    };
+  }, [leaders, promotions, today]);
+
   const analytics = useMemo(() => {
     const filter = promoFilter === "all" ? null : promoFilter;
 
@@ -564,6 +620,55 @@ const DashboardView: React.FC<Props> = ({
           colorClass="border-sbbsGray"
           icon={<Icons.Abandon />}
           suffix=""
+        />
+      </div>
+
+      {/* KPI STRUCTURELS LEADERS */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+        <KPIBox
+          title="Total leaders"
+          value={leadersStats.total}
+          subValue="Tous inscrits"
+          colorClass="border-sbbsNavy"
+          icon={<Icons.Profile />}
+          suffix=""
+        />
+
+        <KPIBox
+          title="Leaders actifs"
+          value={leadersStats.actifs}
+          subValue="Dans les promotions en cours"
+          colorClass="border-sbbsGreen"
+          icon={<Icons.Dashboard />}
+          suffix=""
+        />
+
+        <KPIBox
+          title="Leaders achevés"
+          value={leadersStats.acheves}
+          subValue="Dans les promotions achevées"
+          colorClass="border-sbbsGray"
+          icon={<Icons.Promo />}
+          suffix=""
+        />
+
+        <KPIBox
+          title="En attente"
+          value={leadersStats.attente}
+          subValue="Leaders non affectés"
+          colorClass="border-yellow-400"
+          icon={<Icons.Profile />}
+          suffix=""
+        />
+
+        <KPIBox
+          title="Abandons"
+          value={leadersStats.abandons}
+          subValue="Sortis du cycle"
+          colorClass="border-sbbsRed"
+          icon={<Icons.Abandon />}
+          suffix=""
+          isNegative={leadersStats.abandons > 0}
         />
       </div>
 
